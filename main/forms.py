@@ -237,6 +237,11 @@ class LectureCreateForm(forms.ModelForm):
                     if base_text
                     else extracted
                 )
+            elif (uploaded_file.name or "").lower().endswith(".pdf"):
+                raise forms.ValidationError(
+                    "Не удалось извлечь текст из PDF. Добавьте описание в поле «Содержание» "
+                    "или загрузите PDF с текстовым слоем (не скан без OCR)."
+                )
         if commit:
             lecture.save()
         return lecture
