@@ -35,6 +35,13 @@ else:
     CSRF_TRUSTED_ORIGINS = []
 
 # Автоматическое добавление хостов Render
+# На Render по умолчанию поддерживаем демо-учётку admin (сброс пароля при входе на /login/).
+_ensure_demo_admin_env = os.environ.get('ENSURE_DEMO_ADMIN', 'auto').lower()
+if _ensure_demo_admin_env == 'auto':
+    ENSURE_DEMO_ADMIN = bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME')) or DEBUG
+else:
+    ENSURE_DEMO_ADMIN = _ensure_demo_admin_env in ('1', 'true', 'yes')
+
 render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 if render_host:
     if render_host not in ALLOWED_HOSTS:

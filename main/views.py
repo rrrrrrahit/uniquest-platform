@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.contrib.auth import login, authenticate, logout
@@ -1043,6 +1044,14 @@ def register_view(request):
 def login_view(request):
     if request.user.is_authenticated:
         return redirect(_role_home(request.user))
+
+    if getattr(settings, "ENSURE_DEMO_ADMIN", False):
+        try:
+            from main.bootstrap import ensure_default_admin
+
+            ensure_default_admin()
+        except Exception:
+            pass
 
     if request.method == 'POST':
         if _rate_limit_exceeded(request, "login", limit=20, window_seconds=300):
