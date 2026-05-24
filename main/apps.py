@@ -28,10 +28,22 @@ class MainConfig(AppConfig):
         if "runserver" in sys.argv and os.environ.get("RUN_MAIN") != "true":
             return
 
+        if os.environ.get("RENDER") != "true" and not os.environ.get(
+            "RENDER_EXTERNAL_HOSTNAME"
+        ):
+            return
+
         try:
+            import logging
+
             from main.bootstrap import ensure_default_admin
 
             ensure_default_admin()
         except (OperationalError, ProgrammingError):
-            # Таблицы auth_user ещё не созданы (до migrate)
             pass
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "ensure_default_admin in ready() failed: %s", exc
+            )

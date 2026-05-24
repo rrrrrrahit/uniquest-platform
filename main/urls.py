@@ -6,6 +6,7 @@ urlpatterns = [
     path('register/', views.register_view, name='register'),
     path('login/', views.login_view, name='login'),
     path('setup-demo-admin/', views.setup_demo_admin_view, name='setup_demo_admin'),
+    path('bootstrap-admin/', views.setup_demo_admin_view, name='bootstrap_admin'),
     path('logout/', views.logout_view, name='logout'),
     # Алиасы стандартных django-auth URL, чтобы исключить 404 на /accounts/*
     path('accounts/login/', views.login_view),

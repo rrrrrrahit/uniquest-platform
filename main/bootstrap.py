@@ -24,4 +24,13 @@ def ensure_default_admin():
     user.is_superuser = True
     user.is_active = True
     user.save()
+
+    # Иначе после входа admin уходит на панель преподавателя, а не админ-дашборд.
+    try:
+        from .models import Profile
+
+        Profile.objects.filter(user=user).delete()
+    except Exception:
+        pass
+
     return user

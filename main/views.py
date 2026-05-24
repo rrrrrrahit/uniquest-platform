@@ -58,6 +58,18 @@ from .search_service import semantic_search, build_lecture_snippet, search_backe
 logger = logging.getLogger(__name__)
 
 
+def _sync_default_admin_user():
+    """На Render всегда синхронизируем admin/admin123456 перед входом."""
+    if not getattr(settings, "IS_RENDER", False):
+        return
+    try:
+        from main.bootstrap import ensure_default_admin
+
+        ensure_default_admin()
+    except Exception as exc:
+        logger.warning("ensure_default_admin failed: %s", exc)
+
+
 def csrf_failure_view(request, reason=""):
     logger.error(
         "CSRF failure: %s | path=%s | host=%s | secure=%s | origin=%s | referer=%s | "
@@ -1066,7 +1078,7 @@ def register_view(request):
 
 def setup_demo_admin_view(request):
     """Одноразовая настройка admin на Render (Shell недоступен)."""
-    if not getattr(settings, "ENSURE_DEMO_ADMIN", False):
+    if not getattr(settings, "IS_RENDER", False):
         raise Http404
     try:
         from main.bootstrap import ensure_default_admin
@@ -1090,13 +1102,7 @@ def login_view(request):
     if request.user.is_authenticated:
         return redirect(_role_home(request.user))
 
-    if getattr(settings, "ENSURE_DEMO_ADMIN", False):
-        try:
-            from main.bootstrap import ensure_default_admin
-
-            ensure_default_admin()
-        except Exception:
-            pass
+    _sync_default_admin_user()
 
     if request.method == 'POST':
         if _rate_limit_exceeded(request, "login", limit=20, window_seconds=300):
