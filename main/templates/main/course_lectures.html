@@ -8,7 +8,7 @@
 
   <form method="get" class="row g-2 mb-3">
     <div class="col-md-8">
-      <input type="text" class="form-control" name="q" placeholder="Поиск по лекциям (семантический)" value="{{ q }}">
+      <input type="text" class="form-control" name="q" placeholder="Поиск по лекциям этого курса..." value="{{ q }}">
     </div>
     <div class="col-md-4">
       <button class="btn btn-primary" type="submit">Искать</button>
@@ -28,7 +28,7 @@
     </ul>
   </div>
   {% elif q %}
-  <p>По запросу «{{ q }}» ничего не найдено.</p>
+  <div class="alert alert-info">По запросу «{{ q }}» в этом курсе ничего не найдено. Попробуйте другие слова из названия лекции или темы.</div>
   {% endif %}
 
   <h3>Все лекции курса</h3>

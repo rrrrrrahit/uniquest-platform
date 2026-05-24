@@ -49,7 +49,7 @@ from django.utils import timezone
 from datetime import timedelta
 import json
 
-from .search_service import semantic_search, build_lecture_snippet
+from .search_service import semantic_search, build_lecture_snippet, search_backend_label
 
 
 def _supports_lecture_file() -> bool:
@@ -2036,8 +2036,12 @@ def ai_assistant(request):
 
         if query:
             try:
-                # Семантический поиск по реальным материалам
-                all_results = semantic_search(query, top_k=10)
+                course_ids = {c.id for c in user_courses if c and hasattr(c, "id")} if user_courses else None
+                all_results = semantic_search(
+                    query,
+                    top_k=10,
+                    course_ids=course_ids if course_ids else None,
+                )
                 
                 # Загружаем объекты лекций для результатов
                 from .models import Lecture
@@ -2118,6 +2122,7 @@ def ai_assistant(request):
             'focus_areas': focus_areas,
             'is_teacher': is_teacher,
             'recent_materials': recent_materials,
+            'search_backend': search_backend_label(),
         })
     except Exception as e:
         # Общая обработка ошибок
@@ -2579,7 +2584,7 @@ def course_lectures(request, pk: int):
     q = request.GET.get("q", "").strip()
     search_results = None
     if q:
-        search_results = semantic_search(q, top_k=5)
+        search_results = semantic_search(q, top_k=10, course_ids=[course.id])
     return render(
         request,
         "main/course_lectures.html",
@@ -2598,7 +2603,11 @@ def lecture_detail(request, pk: int):
     if not _user_can_access_course(request.user, lecture.course):
         return _deny_and_redirect(request, "У вас нет доступа к этому материалу.")
 
-    related = semantic_search(lecture.title, top_k=5)
+    related = [
+        r
+        for r in semantic_search(lecture.title, top_k=8, course_ids=[lecture.course_id])
+        if r.get("id") != lecture.id
+    ][:5]
     return render(
         request,
         "main/lecture_detail.html",

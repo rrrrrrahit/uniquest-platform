@@ -41,6 +41,20 @@ class TrainModelTests(TestCase):
         self.assertIn("r2", metrics)
 
 
+class SearchServiceTests(TestCase):
+    def setUp(self):
+        call_command("seed_demo", students=10, groups=2, courses=3, seed=9)
+
+    def test_semantic_search_without_vectors_returns_results(self):
+        from main.search_service import semantic_search
+
+        Lecture.objects.update(vector_embedding=None)
+        results = semantic_search("программирование", top_k=5)
+        self.assertTrue(len(results) > 0)
+        self.assertIn("title", results[0])
+        self.assertIn("snippet", results[0])
+
+
 class ApiTests(TestCase):
     def setUp(self):
         call_command("seed_demo", students=20, groups=3, courses=3, seed=3)

@@ -4,6 +4,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand
 
 from main.models import Lecture
+from main.search_service import _get_search_text
 
 
 class Command(BaseCommand):
@@ -49,15 +50,29 @@ class Command(BaseCommand):
             use_embeddings = False
             model = None
 
-        texts = [lec.content_text for lec in lectures]
-        ids = [lec.id for lec in lectures]
+        indexed = []
+        for lec in lectures:
+            text = _get_search_text(lec).strip()
+            if text:
+                indexed.append((lec, text))
 
-        if use_embeddings:
+        if not indexed:
+            self.stdout.write(
+                self.style.WARNING(
+                    "Нет лекций с извлекаемым текстом (файл или content_text). "
+                    "Поиск будет работать по заголовкам через BM25."
+                )
+            )
+
+        texts = [text for _, text in indexed]
+        ids = [lec.id for lec, _ in indexed]
+
+        if use_embeddings and texts:
             self.stdout.write("Генерация эмбеддингов для лекций...")
             embeddings = model.encode(texts, show_progress_bar=False)
 
             # Сохраняем в БД (поле vector_embedding)
-            for lec, emb in zip(lectures, embeddings):
+            for (lec, _), emb in zip(indexed, embeddings):
                 lec.vector_embedding = list(map(float, emb))
                 lec.save(update_fields=["vector_embedding"])
 
@@ -83,11 +98,12 @@ class Command(BaseCommand):
         else:
             backend = "bm25"
 
+        has_vectors = use_embeddings and bool(texts)
         info = {
             "backend": backend,
-            "n_lectures": lectures.count(),
-            "has_embeddings": use_embeddings,
-            "model_name": model_name if use_embeddings else None,
+            "n_lectures": len(indexed),
+            "has_embeddings": has_vectors,
+            "model_name": model_name if has_vectors else None,
         }
         info_path.write_text(json.dumps(info, indent=2), encoding="utf-8")
 
