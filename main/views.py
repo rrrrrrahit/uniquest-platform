@@ -318,9 +318,11 @@ def create_test_student_view(request):
             'is_superuser': True,
         }
     )
-    if admin_created:
-        admin_user.set_password('admin123456')
-        admin_user.save()
+    admin_user.set_password('admin123456')
+    admin_user.is_staff = True
+    admin_user.is_superuser = True
+    admin_user.is_active = True
+    admin_user.save(update_fields=['password', 'is_staff', 'is_superuser', 'is_active'])
     
     if request.method == 'POST':
         try:

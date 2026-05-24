@@ -1,2 +1,1 @@
-web: gunicorn uniquest.wsgi:application --bind 0.0.0.0:$PORT --access-logfile - --error-logfile - --capture-output --log-level info
-
+web: python manage.py migrate --noinput && python manage.py create_admin && gunicorn uniquest.wsgi:application --bind 0.0.0.0:$PORT --access-logfile - --error-logfile - --capture-output --log-level info
