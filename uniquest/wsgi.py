@@ -14,3 +14,12 @@ from django.core.wsgi import get_wsgi_application
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'uniquest.settings')
 
 application = get_wsgi_application()
+
+# Гарантируем admin при старте gunicorn (Render Shell часто read-only).
+try:
+    from django.db.utils import OperationalError, ProgrammingError
+    from main.bootstrap import ensure_default_admin
+
+    ensure_default_admin()
+except (OperationalError, ProgrammingError):
+    pass
