@@ -414,7 +414,10 @@ def _get_search_text(lecture: Lecture) -> str:
             lecture.save(update_fields=["content_text"])
         except Exception:
             pass
-    return extracted
+        return extracted
+
+    # Файл на диске мог пропасть (Render) — хотя бы ищем по названию.
+    return (lecture.title or "").strip()
 
 
 def build_lecture_snippet(lecture: Lecture, query: str = "", max_len: int = 320) -> str:

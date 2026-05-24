@@ -74,12 +74,15 @@
             <li class="list-group-item">
               <div class="fw-semibold">{{ lecture.title }}</div>
               <div class="small text-muted mb-2">{{ lecture.created_at|date:"d.m.Y H:i" }}</div>
-              {% if lecture.lecture_file %}
+              <a href="{% url 'lecture_detail' lecture.id %}" class="btn btn-sm btn-outline-secondary me-1">
+                Открыть
+              </a>
+              {% if lecture.content_text or lecture.lecture_file %}
                 <a href="{% url 'download_lecture_file' lecture.id %}" class="btn btn-sm btn-outline-primary">
-                  <i class="fas fa-download me-1"></i>Скачать файл
+                  <i class="fas fa-download me-1"></i>Скачать
                 </a>
               {% elif lecture.content_url %}
-                <a href="{{ lecture.content_url }}" class="btn btn-sm btn-outline-secondary" target="_blank">
+                <a href="{{ lecture.content_url }}" class="btn btn-sm btn-outline-primary" target="_blank" rel="noopener noreferrer">
                   Открыть ссылку
                 </a>
               {% endif %}

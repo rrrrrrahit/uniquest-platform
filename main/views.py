@@ -8,7 +8,7 @@ from django.contrib.auth import login, authenticate, logout
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.views.decorators.csrf import ensure_csrf_cookie
-from django.http import JsonResponse, FileResponse, Http404
+from django.http import JsonResponse, FileResponse, Http404, HttpResponse
 from functools import wraps
 from collections import defaultdict
 from datetime import timedelta, datetime, time
@@ -54,8 +54,63 @@ from datetime import timedelta
 import json
 
 from .search_service import semantic_search, build_lecture_snippet, search_backend_label
+from .lecture_utils import (
+    build_lecture_download_response,
+    lecture_has_downloadable_content,
+    lecture_is_searchable,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _enroll_student_in_available_courses(student):
+    """Записывает студента на курсы с материалами (после регистрации часто не было Enrollment)."""
+    if not student:
+        return 0
+
+    course_ids = set()
+    if student.group_id:
+        course_ids.update(
+            Enrollment.objects.filter(student__group_id=student.group_id).values_list(
+                "course_id", flat=True
+            )
+        )
+
+    course_ids.update(
+        Lecture.objects.exclude(content_text="")
+        .exclude(content_text__isnull=True)
+        .values_list("course_id", flat=True)
+        .distinct()
+    )
+    course_ids.update(
+        Lecture.objects.exclude(lecture_file="")
+        .exclude(lecture_file__isnull=True)
+        .values_list("course_id", flat=True)
+        .distinct()
+    )
+
+    created = 0
+    for course_id in course_ids:
+        if not course_id:
+            continue
+        _, was_created = Enrollment.objects.get_or_create(
+            student=student,
+            course_id=course_id,
+        )
+        if was_created:
+            created += 1
+    return created
+
+
+def _get_student_enrollments(user):
+    try:
+        student = Student.objects.get(user=user)
+    except Student.DoesNotExist:
+        return None, []
+    if not Enrollment.objects.filter(student=student).exists():
+        _enroll_student_in_available_courses(student)
+    enrollments = Enrollment.objects.filter(student=student).select_related("course")
+    return student, [e.course for e in enrollments if e.course]
 
 
 def _sync_default_admin_user():
@@ -1054,7 +1109,7 @@ def register_view(request):
                         student_email = f"{email_base}{counter}@{email_domain}"
                         counter += 1
                     
-                    Student.objects.get_or_create(
+                    student, _ = Student.objects.get_or_create(
                         user=user,
                         defaults={
                             "first_name": user.first_name or user.username,
@@ -1063,6 +1118,12 @@ def register_view(request):
                             "group": group,
                         },
                     )
+                    added = _enroll_student_in_available_courses(student)
+                    if added:
+                        messages.info(
+                            request,
+                            f"Вы автоматически записаны на {added} дисциплин(у/ы) с учебными материалами.",
+                        )
                 login(request, user)
                 messages.success(request, 'Регистрация успешна. Добро пожаловать!')
                 return redirect("teacher_dashboard" if role == Profile.ROLE_TEACHER else "dashboard")
@@ -1642,13 +1703,9 @@ def _dashboard_impl(request):
     # Получаем курсы, на которые записан студент
     student_profile = getattr(user, 'profile', None)
     if student_profile and student_profile.role == Profile.ROLE_STUDENT:
-        # Получаем студента из модели Student
-        try:
-            student_obj = Student.objects.get(user=user)
-            enrollments = Enrollment.objects.filter(student=student_obj).select_related('course')
-            courses = [enrollment.course for enrollment in enrollments]
-        except Student.DoesNotExist:
-            courses = Course.objects.all()[:10]  # Fallback
+        student_obj, courses = _get_student_enrollments(user)
+        if student_obj is None:
+            courses = []
     else:
         courses = Course.objects.all()[:10]
     
@@ -2037,20 +2094,17 @@ def ai_assistant(request):
         specialty = profile.specialty if profile and hasattr(profile, 'specialty') and profile.specialty else None
         is_teacher = bool(profile and profile.role == Profile.ROLE_TEACHER)
         
-        # Получаем курсы пользователя по роли
         student_obj = None
         user_courses = []
         if is_teacher:
             user_courses = list(Course.objects.filter(teacher=user))
-        elif profile:
-            try:
-                student_obj = Student.objects.get(user=user)
-                enrollments = Enrollment.objects.filter(student=student_obj).select_related('course')
-                user_courses = [e.course for e in enrollments if e.course]
-            except Student.DoesNotExist:
-                pass
-            except Exception:
-                pass
+        elif profile and profile.role == Profile.ROLE_STUDENT:
+            student_obj, user_courses = _get_student_enrollments(user)
+            if student_obj and not user_courses:
+                messages.info(
+                    request,
+                    "Вы пока не записаны на дисциплины с материалами. Обратитесь к преподавателю.",
+                )
         
         # Поиск
         query = request.GET.get('q', '').strip()
@@ -2088,17 +2142,13 @@ def ai_assistant(request):
                 
                 # Строго ограничиваем результаты доступными курсами и только реальными материалами.
                 if user_courses:
-                    course_ids = {c.id for c in user_courses if c and hasattr(c, 'id')}
+                    course_ids = {c.id for c in user_courses if c and hasattr(c, "id")}
                     for result in all_results:
-                        lecture = result.get('lecture')
+                        lecture = result.get("lecture")
                         if (
                             lecture
                             and getattr(lecture, "course_id", None) in course_ids
-                            and (
-                                getattr(lecture, "lecture_file", None)
-                                or getattr(lecture, "content_url", "")
-                                or getattr(lecture, "content_text", "")
-                            )
+                            and lecture_is_searchable(lecture)
                         ):
                             search_results.append(result)
                     search_results = search_results[:10]
@@ -2666,25 +2716,15 @@ def download_lecture_file(request, pk: int):
     if not has_access:
         return _deny_and_redirect(request, "У вас нет доступа к этому материалу.")
 
-    if not _supports_lecture_file() or not getattr(lecture, "lecture_file", None):
-        messages.error(request, "Файл лекции не найден.")
-        return redirect("course_detail", pk=lecture.course_id)
+    response = build_lecture_download_response(lecture)
+    if response is not None:
+        return response
 
-    file_path = Path(lecture.lecture_file.path)
-    if not file_path.exists():
-        raise Http404("Файл не найден на сервере.")
-
-    if file_path.stat().st_size == 0:
-        messages.error(request, "Файл повреждён или пустой. Попросите преподавателя загрузить его заново.")
-        return redirect("course_detail", pk=lecture.course_id)
-
-    response = FileResponse(
-        open(file_path, "rb"),
-        as_attachment=True,
-        filename=file_path.name,
+    messages.error(
+        request,
+        "Материал недоступен для скачивания. Откройте лекцию на сайте — текст может быть в карточке.",
     )
-    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    return response
+    return redirect("lecture_detail", pk=lecture.id)
 
 
 @login_required
