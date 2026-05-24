@@ -25,34 +25,53 @@ if ALLOWED_HOSTS_ENV:
 else:
     ALLOWED_HOSTS = ['*']
 
-# --- CSRF trusted origins ---
-CSRF_TRUSTED_ORIGINS_ENV = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
-if CSRF_TRUSTED_ORIGINS_ENV:
-    CSRF_TRUSTED_ORIGINS = [
-        origin.strip() for origin in CSRF_TRUSTED_ORIGINS_ENV.split(',') if origin.strip()
-    ]
-else:
-    CSRF_TRUSTED_ORIGINS = []
-
-# Автоматическое добавление хостов Render
 # Демо-платформа: по умолчанию гарантируем admin/admin123456 (отключить: ENSURE_DEMO_ADMIN=false).
 ENSURE_DEMO_ADMIN = os.environ.get('ENSURE_DEMO_ADMIN', 'true').lower() not in ('0', 'false', 'no')
 
-render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+render_host = (os.environ.get('RENDER_EXTERNAL_HOSTNAME') or '').strip()
 if render_host:
-    if render_host not in ALLOWED_HOSTS:
+    if render_host not in ALLOWED_HOSTS and '.onrender.com' not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(render_host)
-    if '*.onrender.com' not in ALLOWED_HOSTS:
-        ALLOWED_HOSTS.append('*.onrender.com')
+    if '.onrender.com' not in ALLOWED_HOSTS and '*.onrender.com' not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append('.onrender.com')
 
-# Подстраховка CSRF для Render/custom host: автоматически доверяем текущим host'ам.
-_auto_csrf_origins = set(CSRF_TRUSTED_ORIGINS)
-for host in ALLOWED_HOSTS:
-    clean_host = host.lstrip(".")
-    if clean_host and clean_host != "*":
-        _auto_csrf_origins.add(f"https://{host}")
-        _auto_csrf_origins.add(f"http://{host}")
-CSRF_TRUSTED_ORIGINS = sorted(_auto_csrf_origins)
+
+def _build_csrf_trusted_origins():
+    """
+    Django не поддерживает wildcards в CSRF_TRUSTED_ORIGINS (https://*.onrender.com не работает).
+    Добавляем точные origin для Render и доменов из env.
+    """
+    origins = set()
+
+    for part in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(','):
+        part = part.strip()
+        if not part or '*' in part:
+            continue
+        if '://' in part:
+            origins.add(part.rstrip('/'))
+        else:
+            origins.add(f'https://{part.lstrip(".")}')
+
+    if render_host:
+        origins.add(f'https://{render_host}')
+
+    render_url = (os.environ.get('RENDER_EXTERNAL_URL') or '').strip().rstrip('/')
+    if render_url.startswith('http'):
+        origins.add(render_url)
+
+    for host in ALLOWED_HOSTS:
+        host = (host or '').strip()
+        if not host or host == '*' or '*' in host:
+            continue
+        clean = host.lstrip('.')
+        origins.add(f'https://{clean}')
+        if DEBUG:
+            origins.add(f'http://{clean}')
+
+    return sorted(origins)
+
+
+CSRF_TRUSTED_ORIGINS = _build_csrf_trusted_origins()
 
 # Безопасность для production
 if not DEBUG:
@@ -64,6 +83,10 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
+
+# Cookies: Lax помогает формам login/POST за HTTPS на Render.
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
 
 # --- УСТАНОВЛЕННЫЕ ПРИЛОЖЕНИЯ ---
 INSTALLED_APPS = [

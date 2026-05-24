@@ -19,8 +19,9 @@ services:
         generateValue: true
       - key: ALLOWED_HOSTS
         value: .onrender.com,uniquest.kz,www.uniquest.kz
+      # Точные origin (без *): Render-хост добавится из RENDER_EXTERNAL_HOSTNAME в settings.py
       - key: CSRF_TRUSTED_ORIGINS
-        value: https://*.onrender.com,https://uniquest.kz,https://www.uniquest.kz
+        value: https://uniquest.kz,https://www.uniquest.kz
       # Подключение к существующей базе данных
       - key: DATABASE_URL
         fromDatabase:

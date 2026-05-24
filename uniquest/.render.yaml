@@ -11,7 +11,7 @@ services:
       - key: ALLOWED_HOSTS
         value: ".onrender.com,uniquest.kz,www.uniquest.kz"
       - key: CSRF_TRUSTED_ORIGINS
-        value: "https://*.onrender.com,https://uniquest.kz,https://www.uniquest.kz"
+        value: "https://uniquest.kz,https://www.uniquest.kz"
       - key: DJANGO_SETTINGS_MODULE
         value: uniquest.settings
       - key: PYTHON_VERSION
