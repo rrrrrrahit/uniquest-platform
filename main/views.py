@@ -4,6 +4,7 @@ from django.urls import reverse
 from django.contrib.auth import login, authenticate, logout
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.http import JsonResponse, FileResponse, Http404
 from functools import wraps
 from collections import defaultdict
@@ -977,6 +978,7 @@ def create_test_teacher_view(request):
 
     return render(request, 'main/create_test_teacher.html')
 
+@ensure_csrf_cookie
 def register_view(request):
     if request.user.is_authenticated:
         return redirect(_role_home(request.user))
@@ -1062,6 +1064,7 @@ def setup_demo_admin_view(request):
         return JsonResponse({"ok": False, "error": str(exc)}, status=500)
 
 
+@ensure_csrf_cookie
 def login_view(request):
     if request.user.is_authenticated:
         return redirect(_role_home(request.user))

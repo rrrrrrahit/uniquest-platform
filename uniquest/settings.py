@@ -16,7 +16,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # --- БЕЗОПАСНОСТЬ ---
 SECRET_KEY = os.environ.get('SECRET_KEY', get_random_secret_key())
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
+IS_RENDER = os.environ.get('RENDER') == 'true' or bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME'))
+# На Render по умолчанию production-режим (меньше CSRF/SSL сюрпризов).
+if IS_RENDER and os.environ.get('DEBUG') is None:
+    DEBUG = False
+else:
+    DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
 # --- ALLOWED_HOSTS ---
 ALLOWED_HOSTS_ENV = os.environ.get('ALLOWED_HOSTS', '')
@@ -63,6 +68,9 @@ def _build_csrf_trusted_origins():
         host = (host or '').strip()
         if not host or host == '*' or '*' in host:
             continue
+        # .onrender.com в ALLOWED_HOSTS — не добавляем https://onrender.com (неверный origin).
+        if host.startswith('.'):
+            continue
         clean = host.lstrip('.')
         origins.add(f'https://{clean}')
         if DEBUG:
@@ -73,16 +81,22 @@ def _build_csrf_trusted_origins():
 
 CSRF_TRUSTED_ORIGINS = _build_csrf_trusted_origins()
 
+# Render всегда за HTTPS reverse proxy — нужно даже при DEBUG=True.
+if IS_RENDER or not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 # Безопасность для production
 if not DEBUG:
-    # Корректно определяем HTTPS за reverse proxy (Render/Nginx и т.д.)
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
+elif IS_RENDER:
+    # DEBUG на Render: cookies всё равно secure (сайт только по HTTPS).
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # Cookies: Lax помогает формам login/POST за HTTPS на Render.
 SESSION_COOKIE_SAMESITE = 'Lax'
@@ -105,6 +119,7 @@ MIDDLEWARE = [
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'main.middleware.RenderCsrfOriginMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'main.middleware.AccessAuditMiddleware',
