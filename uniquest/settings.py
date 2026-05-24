@@ -38,7 +38,11 @@ else:
 # На Render по умолчанию поддерживаем демо-учётку admin (сброс пароля при входе на /login/).
 _ensure_demo_admin_env = os.environ.get('ENSURE_DEMO_ADMIN', 'auto').lower()
 if _ensure_demo_admin_env == 'auto':
-    ENSURE_DEMO_ADMIN = bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME')) or DEBUG
+    ENSURE_DEMO_ADMIN = (
+        bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME'))
+        or '.onrender.com' in os.environ.get('ALLOWED_HOSTS', '')
+        or DEBUG
+    )
 else:
     ENSURE_DEMO_ADMIN = _ensure_demo_admin_env in ('1', 'true', 'yes')
 

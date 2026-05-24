@@ -1041,6 +1041,27 @@ def register_view(request):
         form = UserRegisterForm()
     return render(request, 'main/register.html', {'form': form})
 
+def setup_demo_admin_view(request):
+    """Одноразовая настройка admin на Render (Shell недоступен)."""
+    if not getattr(settings, "ENSURE_DEMO_ADMIN", False):
+        raise Http404
+    try:
+        from main.bootstrap import ensure_default_admin
+        from main.bootstrap import DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME
+
+        ensure_default_admin()
+        return JsonResponse(
+            {
+                "ok": True,
+                "username": DEFAULT_ADMIN_USERNAME,
+                "password": DEFAULT_ADMIN_PASSWORD,
+                "login_url": reverse("login"),
+            }
+        )
+    except Exception as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=500)
+
+
 def login_view(request):
     if request.user.is_authenticated:
         return redirect(_role_home(request.user))
