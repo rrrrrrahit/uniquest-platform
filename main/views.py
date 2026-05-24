@@ -1,5 +1,8 @@
+import logging
+
 from django.conf import settings
 from django.shortcuts import render, redirect, get_object_or_404
+from django.views.csrf import csrf_failure as django_csrf_failure
 from django.urls import reverse
 from django.contrib.auth import login, authenticate, logout
 from django.contrib import messages
@@ -51,6 +54,24 @@ from datetime import timedelta
 import json
 
 from .search_service import semantic_search, build_lecture_snippet, search_backend_label
+
+logger = logging.getLogger(__name__)
+
+
+def csrf_failure_view(request, reason=""):
+    logger.error(
+        "CSRF failure: %s | path=%s | host=%s | secure=%s | origin=%s | referer=%s | "
+        "csrf_cookie=%s | trusted_origins=%s",
+        reason,
+        request.path,
+        request.META.get("HTTP_HOST"),
+        request.is_secure(),
+        request.META.get("HTTP_ORIGIN"),
+        request.META.get("HTTP_REFERER"),
+        settings.CSRF_COOKIE_NAME in request.COOKIES,
+        settings.CSRF_TRUSTED_ORIGINS,
+    )
+    return django_csrf_failure(request, reason=reason)
 
 
 def _supports_lecture_file() -> bool:

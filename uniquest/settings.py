@@ -59,6 +59,7 @@ def _build_csrf_trusted_origins():
 
     if render_host:
         origins.add(f'https://{render_host}')
+        origins.add(f'http://{render_host}')
 
     render_url = (os.environ.get('RENDER_EXTERNAL_URL') or '').strip().rstrip('/')
     if render_url.startswith('http'):
@@ -101,6 +102,10 @@ elif IS_RENDER:
 # Cookies: Lax помогает формам login/POST за HTTPS на Render.
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_PATH = '/'
+
+# Логирование причин CSRF (видно в Render Logs).
+CSRF_FAILURE_VIEW = 'main.views.csrf_failure_view'
 
 # --- УСТАНОВЛЕННЫЕ ПРИЛОЖЕНИЯ ---
 INSTALLED_APPS = [
@@ -119,8 +124,7 @@ MIDDLEWARE = [
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'main.middleware.RenderCsrfOriginMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
+    'main.middleware.RenderCsrfMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'main.middleware.AccessAuditMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
