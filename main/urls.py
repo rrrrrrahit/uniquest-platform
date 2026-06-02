@@ -1,5 +1,7 @@
 from django.urls import path
+
 from . import views
+from .kb import knowledge_base_view
 
 urlpatterns = [
     path('', views.index, name='index'),
@@ -19,7 +21,7 @@ urlpatterns = [
     path('profile/', views.profile_view, name='profile'),
     path('schedule/', views.schedule_view, name='schedule'),
     path('grades/', views.grades_view, name='grades'),
-    path('ai-assistant/', views.ai_assistant, name='ai_assistant'),
+    path('ai-assistant/', knowledge_base_view, name='ai_assistant'),
     path('ai-learning-assistant/', views.ai_learning_assistant, name='ai_learning_assistant'),
     path('ai-learning-assistant/predict/<int:course_id>/', views.predict_exam_view, name='predict_exam'),
     path('ai-learning-assistant/plan/<int:course_id>/', views.create_study_plan_view, name='create_study_plan'),

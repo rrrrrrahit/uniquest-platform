@@ -150,11 +150,19 @@ class KnowledgeBaseViewTests(TestCase):
     def test_ai_assistant_search_does_not_crash(self):
         client = Client()
         client.login(username="kb_teacher", password="pass12345")
-        resp = client.get("/ai-assistant/?q=да")
+        resp = client.get("/ai-assistant/?q=статья")
         self.assertEqual(resp.status_code, 200)
         body = resp.content.decode("utf-8", errors="replace")
         self.assertNotIn("UnboundLocalError", body)
-        self.assertNotIn("Произошла ошибка: cannot access local variable", body)
+        self.assertNotIn("cannot access local variable", body)
+        self.assertIn("2026-06-03-v3", body)
+
+    def test_kb_finds_content_text(self):
+        from main.kb import search_lectures
+
+        results = search_lectures(self.teacher, "алгоритм", limit=5)
+        self.assertTrue(results)
+        self.assertIn("алгоритм", results[0]["snippet"].lower())
 
 
 class RoleAccessSmokeTests(TestCase):

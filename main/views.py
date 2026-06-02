@@ -53,18 +53,12 @@ from django.utils import timezone
 from datetime import timedelta
 import json
 
-from .search_service import (
-    semantic_search,
-    hybrid_search_for_lectures,
-    serialize_search_results,
-    prepare_lecture_for_search,
-)
+from .search_service import semantic_search, prepare_lecture_for_search
 from .lecture_utils import (
     build_lecture_download_response,
     lecture_has_downloadable_content,
     lecture_is_searchable,
 )
-from . import knowledge_base
 
 logger = logging.getLogger(__name__)
 
@@ -181,15 +175,26 @@ def _supports_lecture_file() -> bool:
 
 
 def _recent_materials_queryset(base_qs):
-    return knowledge_base.recent_materials_queryset(base_qs)
+    qs = base_qs.select_related("course").order_by("-created_at")
+    if _supports_lecture_file():
+        return qs.filter(
+            Q(lecture_file__isnull=False)
+            | ~Q(content_url="")
+            | ~Q(content_text="")
+        ).exclude(lecture_file="")
+    return qs.filter(~Q(content_url="") | ~Q(content_text=""))
 
 
 def _lectures_visible_to_user(user):
-    return knowledge_base.lectures_visible_to_user(user)
+    from .kb import visible_lectures
+
+    return visible_lectures(user)
 
 
 def _search_lectures_for_user(user, query: str, limit: int = 10):
-    return knowledge_base.search_lectures_for_user(user, query, limit=limit)
+    from .kb import search_lectures
+
+    return search_lectures(user, query, limit=limit)
 
 
 # Централизованный редирект пользователя по роли.
@@ -556,7 +561,7 @@ def create_test_student_view(request):
                     entry.groups.add(profile)
             
             # Создаем тестовые задания (много для демонстрации ИИ)
-            from .models import Lecture, Assignment, Submission
+            # Lecture, Assignment, Submission — импортированы в начале views.py
             assignments_data = []
             
             # Разные темы для каждого курса
@@ -2128,18 +2133,7 @@ def grades_view(request):
         'calculator_defaults': calculator_defaults,
     })
 
-@login_required
-def ai_assistant(request):
-    """База знаний: поиск по тексту загруженных лекций (PDF/DOCX)."""
-    try:
-        return render(request, "main/ai_assistant.html", knowledge_base.build_page_context(request))
-    except Exception as exc:
-        logger.exception("AI Assistant error: %s", exc)
-        messages.error(
-            request,
-            "Не удалось выполнить поиск. Попробуйте другие слова из лекции или перезагрузите страницу.",
-        )
-        return render(request, "main/ai_assistant.html", knowledge_base.build_error_context(request))
+# База знаний: маршрут /ai-assistant/ → main.kb.knowledge_base_view (см. urls.py)
 
 
 @login_required
@@ -3384,16 +3378,11 @@ def api_search_resources(request):
     top_k = int(payload.get("top_k") or 5)
     top_k = max(1, min(top_k, 20))
 
-    visible = _lectures_visible_to_user(request.user)
-    if not visible.exists():
-        visible = Lecture.objects.all()
-    results = hybrid_search_for_lectures(
-        q,
-        visible,
-        limit=top_k,
-        fast=getattr(settings, "SEARCH_FAST_MODE", True),
-    )
-    return JsonResponse({"results": serialize_search_results(results)})
+    from .kb import search_lectures
+
+    results = search_lectures(request.user, q, limit=top_k)
+    clean = [{k: v for k, v in item.items() if k != "lecture"} for item in results]
+    return JsonResponse({"results": clean})
 
 
 @login_required

@@ -16,6 +16,9 @@
           {% if search_backend %}
             <span class="badge bg-secondary ms-1">{{ search_backend }}</span>
           {% endif %}
+          {% if kb_build_id %}
+            <span class="badge bg-dark ms-1" title="Версия поиска на сервере">{{ kb_build_id }}</span>
+          {% endif %}
           {% if is_teacher %}
             <span class="badge bg-primary ms-2">Режим преподавателя</span>
           {% endif %}
