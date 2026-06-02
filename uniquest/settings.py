@@ -95,7 +95,17 @@ def _apply_db_ssl_options(db_config: dict) -> None:
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # --- БЕЗОПАСНОСТЬ ---
-SECRET_KEY = os.environ.get('SECRET_KEY', get_random_secret_key())
+_secret_env = (os.environ.get('SECRET_KEY') or '').strip()
+if _secret_env:
+    SECRET_KEY = _secret_env
+else:
+    SECRET_KEY = get_random_secret_key()
+    if os.environ.get('RENDER') == 'true' or os.environ.get('RENDER_EXTERNAL_HOSTNAME'):
+        logger.warning(
+            "SECRET_KEY не задан в Environment на Render — задайте постоянный ключ, "
+            "иначе CSRF/сессии могут сбрасываться после перезапуска."
+        )
+
 IS_RENDER = os.environ.get('RENDER') == 'true' or bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME'))
 # На Render не грузим sentence-transformers на каждый поиск (быстрый BM25 + текст файлов).
 SEARCH_FAST_MODE = os.environ.get('SEARCH_FAST_MODE', '1' if IS_RENDER else '0').strip() in (
@@ -181,8 +191,11 @@ if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
+elif IS_RENDER and DEBUG:
+    # DEBUG на Render: без Secure-cookie, иначе форма логина часто даёт CSRF 403.
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
 elif IS_RENDER:
-    # DEBUG на Render: cookies всё равно secure (сайт только по HTTPS).
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
@@ -190,6 +203,7 @@ elif IS_RENDER:
 SESSION_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_PATH = '/'
+CSRF_COOKIE_HTTPONLY = False
 
 # Логирование причин CSRF (видно в Render Logs).
 CSRF_FAILURE_VIEW = 'main.views.csrf_failure_view'
@@ -211,6 +225,7 @@ MIDDLEWARE = [
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'main.middleware.RenderCsrfOriginMiddleware',
     'main.middleware.RenderCsrfMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'main.middleware.AccessAuditMiddleware',
