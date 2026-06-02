@@ -12,6 +12,26 @@ IS_RENDER = os.environ.get("RENDER") == "true" or bool(
 )
 
 
+class EnsureAdminMiddleware:
+    """Один раз на Render создаёт admin (без запроса к БД при импорте wsgi)."""
+
+    _bootstrapped = False
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if IS_RENDER and not EnsureAdminMiddleware._bootstrapped:
+            try:
+                from main.bootstrap import ensure_default_admin
+
+                ensure_default_admin()
+                EnsureAdminMiddleware._bootstrapped = True
+            except Exception as exc:
+                logger.warning("ensure_default_admin failed: %s", exc)
+        return self.get_response(request)
+
+
 class RenderCsrfOriginMiddleware:
     """
     На Render добавляет текущий origin (https://ваш-сервис.onrender.com)

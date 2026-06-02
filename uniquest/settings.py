@@ -228,6 +228,7 @@ MIDDLEWARE = [
     'main.middleware.RenderCsrfOriginMiddleware',
     'main.middleware.RenderCsrfMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'main.middleware.EnsureAdminMiddleware',
     'main.middleware.AccessAuditMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
