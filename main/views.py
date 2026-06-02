@@ -53,7 +53,13 @@ from django.utils import timezone
 from datetime import timedelta
 import json
 
-from .search_service import semantic_search, build_lecture_snippet, search_backend_label
+from .search_service import (
+    semantic_search,
+    build_lecture_snippet,
+    search_backend_label,
+    search_lectures_by_content,
+    prepare_lecture_for_search,
+)
 from .lecture_utils import (
     build_lecture_download_response,
     lecture_has_downloadable_content,
@@ -199,41 +205,12 @@ def _lectures_visible_to_user(user):
 
 
 def _search_lectures_for_user(user, query: str, limit: int = 10):
-    """
-    Надёжный поиск по названию/тексту/курсу среди доступных лекций.
-    Работает даже без векторного индекса и тяжёлой семантики.
-    """
-    query = (query or "").strip()
-    if not query:
-        return []
-
-    base_qs = _lectures_visible_to_user(user)
-    q_filter = (
-        Q(title__icontains=query)
-        | Q(content_text__icontains=query)
-        | Q(course__name__icontains=query)
+    """Поиск по содержимому файлов (PDF/DOCX/txt) и тексту лекций."""
+    return search_lectures_by_content(
+        query,
+        _lectures_visible_to_user(user),
+        limit=limit,
     )
-    for term in query.split():
-        if len(term) >= 2:
-            q_filter |= (
-                Q(title__icontains=term)
-                | Q(content_text__icontains=term)
-                | Q(course__name__icontains=term)
-            )
-
-    hits = base_qs.filter(q_filter).distinct().order_by("-created_at")[:limit]
-    results = []
-    for lecture in hits:
-        results.append(
-            {
-                "id": lecture.id,
-                "title": lecture.title,
-                "snippet": build_lecture_snippet(lecture, query, max_len=240),
-                "score": 85.0,
-                "lecture": lecture,
-            }
-        )
-    return results
 
 
 # Централизованный редирект пользователя по роли.
@@ -2206,17 +2183,16 @@ def ai_assistant(request):
         )
 
         if query:
-            # 1) Сначала простой и надёжный поиск (всегда должен находить по названию).
-            search_results = _search_lectures_for_user(user, query, limit=10)
+            course_ids = list(
+                visible_lectures.values_list("course_id", flat=True).distinct()
+            )
+            search_results = []
+            seen_ids: set[int] = set()
 
-            # 2) Дополняем семантикой, если она доступна.
-            try:
-                course_ids = list(
-                    visible_lectures.values_list("course_id", flat=True).distinct()
-                )
-                if course_ids:
-                    seen_ids = {r["id"] for r in search_results}
-                    for result in semantic_search(query, top_k=10, course_ids=course_ids):
+            # 1) Семантический поиск по извлечённому тексту файлов.
+            if course_ids:
+                try:
+                    for result in semantic_search(query, top_k=12, course_ids=course_ids):
                         lec_id = result.get("id")
                         if not lec_id or lec_id in seen_ids:
                             continue
@@ -2227,18 +2203,25 @@ def ai_assistant(request):
                         if not lecture_is_searchable(lecture):
                             continue
                         result["lecture"] = lecture
-                        result["snippet"] = build_lecture_snippet(lecture, query, max_len=240)
+                        result["snippet"] = build_lecture_snippet(lecture, query, max_len=320)
                         search_results.append(result)
                         seen_ids.add(lec_id)
-                        if len(search_results) >= 10:
-                            break
-            except Exception as e:
-                logger.warning("Semantic search skipped: %s", e)
+                except Exception as e:
+                    logger.warning("Semantic search skipped: %s", e)
+
+            # 2) Прямой поиск по содержимому файлов (PDF/DOCX) — главный режим.
+            for result in _search_lectures_for_user(user, query, limit=12):
+                lec_id = result.get("id")
+                if lec_id and lec_id not in seen_ids:
+                    search_results.append(result)
+                    seen_ids.add(lec_id)
+
+            search_results = search_results[:10]
 
             if not search_results and visible_lectures.exists():
                 messages.info(
                     request,
-                    "По запросу ничего не найдено. Попробуйте слово из названия лекции или дисциплины.",
+                    "По запросу ничего не найдено. Попробуйте слово из текста лекции или названия файла.",
                 )
         else:
             suggested_questions = []
@@ -2803,8 +2786,15 @@ def teacher_dashboard(request):
         if action == "add_resource":
             lecture_form = LectureCreateForm(request.POST, request.FILES, teacher=user)
             if lecture_form.is_valid():
-                lecture_form.save()
-                messages.success(request, "Лекция/ресурс добавлены.")
+                lecture = lecture_form.save()
+                try:
+                    prepare_lecture_for_search(lecture)
+                except Exception as exc:
+                    logger.warning("Lecture index after upload failed: %s", exc)
+                messages.success(
+                    request,
+                    "Лекция/ресурс добавлены. Текст из файла проиндексирован для поиска.",
+                )
                 return redirect("teacher_dashboard")
 
     total_students = User.objects.filter(

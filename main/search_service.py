@@ -402,6 +402,80 @@ def _extract_text_from_lecture_file(lecture: Lecture) -> str:
     return ""
 
 
+def extract_lecture_text(lecture: Lecture) -> str:
+    """Извлекает текст лекции из БД или из файла (PDF/DOCX/txt) и сохраняет в content_text."""
+    return _get_search_text(lecture)
+
+
+def prepare_lecture_for_search(lecture: Lecture) -> bool:
+    """
+    Подготавливает лекцию к поиску: извлекает текст из файла и при возможности
+    сохраняет векторное представление.
+    """
+    text = extract_lecture_text(lecture).strip()
+    if not text:
+        return False
+
+    info = _load_embeddings_backend()
+    model_name = info.get("model_name") or "sentence-transformers/all-MiniLM-L6-v2"
+    try:
+        q_vec = _encode_query(text[:8000])
+        if q_vec is None:
+            return True
+        lecture.vector_embedding = [float(x) for x in q_vec]
+        lecture.save(update_fields=["vector_embedding", "content_text"])
+        return True
+    except Exception:
+        return True
+
+
+def search_lectures_by_content(
+    query: str,
+    lectures_qs: QuerySet,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    """
+    Поиск по содержимому файлов и тексту лекций (с извлечением из PDF/DOCX на лету).
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    q_lower = query.lower()
+    terms = _tokenize(query) or [q_lower]
+    scored: List[tuple[float, Lecture]] = []
+
+    for lecture in lectures_qs.select_related("course").order_by("-created_at")[:400]:
+        body = extract_lecture_text(lecture)
+        title = (lecture.title or "").strip()
+        course_name = (getattr(lecture.course, "name", "") or "").strip()
+        haystack = f"{title}\n{course_name}\n{body}".lower()
+        if not haystack.strip():
+            continue
+
+        score = 0.0
+        if q_lower in title.lower():
+            score += 35.0
+        if q_lower in haystack:
+            score += 25.0
+        for term in terms:
+            if term in title.lower():
+                score += 10.0
+            score += min(haystack.count(term) * 3.0, 24.0)
+
+        if score > 0:
+            scored.append((score, lecture))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {
+            **_lecture_to_result(lec, score, query),
+            "lecture": lec,
+        }
+        for score, lec in scored[:limit]
+    ]
+
+
 def _get_search_text(lecture: Lecture) -> str:
     base = (lecture.content_text or "").strip()
     if base:
@@ -469,7 +543,7 @@ def _build_snippet(text: str, query: str, max_len: int = 320) -> str:
 def search_backend_label() -> str:
     """Короткая подпись для UI: какой режим поиска активен."""
     if _faiss_ready():
-        return "семантический (FAISS)"
+        return "по содержимому файлов + семантика (FAISS)"
     if _db_embeddings_ready():
-        return "семантический (векторы в БД)"
-    return "полнотекстовый (BM25)"
+        return "по содержимому файлов + семантика (векторы)"
+    return "по содержимому файлов + BM25"

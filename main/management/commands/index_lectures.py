@@ -17,9 +17,16 @@ class Command(BaseCommand):
             default="sentence-transformers/all-MiniLM-L6-v2",
             help="Имя модели sentence-transformers (если доступна)",
         )
+        parser.add_argument(
+            "--lecture-id",
+            type=int,
+            default=None,
+            help="Проиндексировать только одну лекцию (после загрузки файла)",
+        )
 
     def handle(self, *args, **options):
         model_name = options["model_name"]
+        lecture_id = options.get("lecture_id")
 
         # Путь для файлов индекса
         base = Path("models")
@@ -30,6 +37,8 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING("=== Индексация лекций ==="))
 
         lectures = Lecture.objects.all()
+        if lecture_id:
+            lectures = lectures.filter(id=lecture_id)
         if not lectures.exists():
             self.stdout.write(self.style.WARNING("Лекций в базе нет."))
             return
