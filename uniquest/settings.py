@@ -27,8 +27,11 @@ def _normalize_render_db_host(host: str) -> str:
     if "." in normalized or normalized in ("localhost", "127.0.0.1"):
         return normalized
 
-    if IS_RENDER and normalized.startswith("dpg-"):
+    if normalized.startswith("dpg-"):
         region = (os.environ.get("RENDER_REGION") or "").strip().lower()
+        if not region:
+            # Render default region fallback for this deployment.
+            region = "oregon"
         if region:
             # Render internal host can appear as short id: dpg-...-a
             # Build canonical regional hostname used by Render Postgres.
@@ -47,7 +50,7 @@ def _validate_render_db_host(host: str, source_name: str) -> None:
     Fail fast on Render when DB host is likely an unresolved short identifier.
     """
     clean = (host or "").strip()
-    if IS_RENDER and clean.startswith("dpg-") and "." not in clean:
+    if clean.startswith("dpg-") and "." not in clean:
         raise ImproperlyConfigured(
             f"{source_name} contains an unresolvable Render DB host '{clean}'. "
             "Set DATABASE_URL/DB_HOST to the full PostgreSQL hostname from Render "
