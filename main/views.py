@@ -55,8 +55,6 @@ import json
 
 from .search_service import (
     semantic_search,
-    build_lecture_snippet,
-    search_backend_label,
     hybrid_search_for_lectures,
     serialize_search_results,
     prepare_lecture_for_search,
@@ -66,6 +64,7 @@ from .lecture_utils import (
     lecture_has_downloadable_content,
     lecture_is_searchable,
 )
+from . import knowledge_base
 
 logger = logging.getLogger(__name__)
 
@@ -182,36 +181,15 @@ def _supports_lecture_file() -> bool:
 
 
 def _recent_materials_queryset(base_qs):
-    qs = base_qs.select_related("course").order_by("-created_at")
-    if _supports_lecture_file():
-        return qs.filter(
-            Q(lecture_file__isnull=False)
-            | ~Q(content_url="")
-            | ~Q(content_text="")
-        ).exclude(lecture_file="")
-    return qs.filter(~Q(content_url="") | ~Q(content_text=""))
+    return knowledge_base.recent_materials_queryset(base_qs)
 
 
 def _lectures_visible_to_user(user):
-    """Лекции, которые пользователь может видеть в базе знаний."""
-    profile = getattr(user, "profile", None)
-    if user.is_staff and not profile:
-        return Lecture.objects.select_related("course").all()
-    if profile and profile.role == Profile.ROLE_TEACHER:
-        return Lecture.objects.select_related("course").filter(course__teacher=user)
-    _, courses = _get_student_enrollments(user)
-    if courses:
-        return Lecture.objects.select_related("course").filter(course__in=courses)
-    return Lecture.objects.none()
+    return knowledge_base.lectures_visible_to_user(user)
 
 
 def _search_lectures_for_user(user, query: str, limit: int = 10):
-    """Гибридный поиск по тексту файлов, BM25, LSA и семантике."""
-    return hybrid_search_for_lectures(
-        query,
-        _lectures_visible_to_user(user),
-        limit=limit,
-    )
+    return knowledge_base.search_lectures_for_user(user, query, limit=limit)
 
 
 # Централизованный редирект пользователя по роли.
@@ -2152,89 +2130,16 @@ def grades_view(request):
 
 @login_required
 def ai_assistant(request):
-    """База знаний с семантическим поиском по доступным материалам."""
+    """База знаний: поиск по тексту загруженных лекций (PDF/DOCX)."""
     try:
-        user = request.user
-        profile = getattr(user, 'profile', None)
-        specialty = profile.specialty if profile and hasattr(profile, 'specialty') and profile.specialty else None
-        is_teacher = bool(profile and profile.role == Profile.ROLE_TEACHER)
-        
-        student_obj = None
-        user_courses = []
-        if is_teacher:
-            user_courses = list(Course.objects.filter(teacher=user))
-        elif profile and profile.role == Profile.ROLE_STUDENT:
-            student_obj, user_courses = _get_student_enrollments(user)
-            if student_obj and not user_courses:
-                messages.info(
-                    request,
-                    "Вы пока не записаны на дисциплины с материалами. Обратитесь к преподавателю.",
-                )
-        
-        # Поиск
-        query = request.GET.get('q', '').strip()
-        search_results = []
-        suggested_questions = []
-        focus_areas = []
-        recent_materials = []
-
-        visible_lectures = _lectures_visible_to_user(user)
-        recent_materials = list(
-            _recent_materials_queryset(visible_lectures)[:12]
+        return render(request, "main/ai_assistant.html", knowledge_base.build_page_context(request))
+    except Exception as exc:
+        logger.exception("AI Assistant error: %s", exc)
+        messages.error(
+            request,
+            "Не удалось выполнить поиск. Попробуйте другие слова из лекции или перезагрузите страницу.",
         )
-
-        if query:
-            search_results = []
-            for result in _search_lectures_for_user(user, query, limit=10):
-                lecture = result.get("lecture")
-                if lecture and not lecture_is_searchable(lecture):
-                    continue
-                if lecture and not result.get("snippet"):
-                    result["snippet"] = build_lecture_snippet(lecture, query, max_len=360)
-                search_results.append(result)
-
-            if not search_results and visible_lectures.exists():
-                messages.info(
-                    request,
-                    "По запросу ничего не найдено. Попробуйте слово из текста лекции или названия файла.",
-                )
-        else:
-            suggested_questions = []
-        popular_questions = []
-        
-        return render(request, 'main/ai_assistant.html', {
-            'query': query,
-            'search_results': search_results,
-            'suggested_questions': suggested_questions,
-            'popular_questions': popular_questions,
-            'specialty': specialty,
-            'student_courses': user_courses,
-            'focus_areas': focus_areas,
-            'is_teacher': is_teacher,
-            'recent_materials': recent_materials,
-            'search_backend': search_backend_label(),
-        })
-    except Exception as e:
-        # Общая обработка ошибок
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f'AI Assistant error: {str(e)}', exc_info=True)
-        messages.error(request, f'Произошла ошибка: {str(e)}')
-        return render(request, 'main/ai_assistant.html', {
-            'query': request.GET.get('q', '').strip(),
-            'search_results': [],
-            'suggested_questions': [
-                "Что такое программирование?",
-                "Основы баз данных",
-                "Веб-разработка для начинающих",
-            ],
-            'popular_questions': [],
-            'specialty': None,
-            'student_courses': [],
-            'focus_areas': [],
-            'is_teacher': False,
-            'recent_materials': [],
-        })
+        return render(request, "main/ai_assistant.html", knowledge_base.build_error_context(request))
 
 
 @login_required
@@ -3482,7 +3387,12 @@ def api_search_resources(request):
     visible = _lectures_visible_to_user(request.user)
     if not visible.exists():
         visible = Lecture.objects.all()
-    results = hybrid_search_for_lectures(q, visible, limit=top_k)
+    results = hybrid_search_for_lectures(
+        q,
+        visible,
+        limit=top_k,
+        fast=getattr(settings, "SEARCH_FAST_MODE", True),
+    )
     return JsonResponse({"results": serialize_search_results(results)})
 
 

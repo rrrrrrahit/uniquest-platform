@@ -788,6 +788,8 @@ def hybrid_search_for_lectures(
     query: str,
     lectures_qs: QuerySet,
     limit: int = 10,
+    *,
+    fast: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Гибридный поиск: BM25 + LSA + векторы + семантика + глубокий разбор текста файлов.
@@ -831,20 +833,21 @@ def hybrid_search_for_lectures(
     if lsa_ranks:
         rank_lists.append(lsa_ranks)
 
-    vector_ranks = _vector_rank_lectures(query, lectures, allowed_ids, top_k=limit * 2)
-    if vector_ranks:
-        rank_lists.append(vector_ranks)
+    if not fast:
+        vector_ranks = _vector_rank_lectures(query, lectures, allowed_ids, top_k=limit * 2)
+        if vector_ranks:
+            rank_lists.append(vector_ranks)
 
-    try:
-        semantic_ranks = []
-        for item in semantic_search(query, top_k=limit * 3, course_ids=course_ids):
-            lec_id = item.get("id")
-            if lec_id in allowed_ids:
-                semantic_ranks.append(lec_id)
-        if semantic_ranks:
-            rank_lists.append(semantic_ranks)
-    except Exception:
-        pass
+        try:
+            semantic_ranks = []
+            for item in semantic_search(query, top_k=limit * 3, course_ids=course_ids):
+                lec_id = item.get("id")
+                if lec_id in allowed_ids:
+                    semantic_ranks.append(lec_id)
+            if semantic_ranks:
+                rank_lists.append(semantic_ranks)
+        except Exception:
+            pass
 
     if not rank_lists:
         return []
@@ -956,8 +959,10 @@ def _build_snippet(text: str, query: str, max_len: int = 320) -> str:
     return snippet
 
 
-def search_backend_label() -> str:
+def search_backend_label(*, fast: bool = False) -> str:
     """Короткая подпись для UI: какой режим поиска активен."""
+    if fast:
+        return "текст файлов + BM25 + LSA"
     parts = ["гибрид: текст файлов", "BM25", "LSA"]
     if _faiss_ready():
         parts.append("FAISS")

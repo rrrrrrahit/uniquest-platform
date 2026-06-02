@@ -125,6 +125,38 @@ class ApiTests(TestCase):
         self.assertIn("results", data)
 
 
+class KnowledgeBaseViewTests(TestCase):
+    def setUp(self):
+        self.teacher = User.objects.create_user(
+            username="kb_teacher",
+            password="pass12345",
+            is_staff=True,
+        )
+        Profile.objects.update_or_create(
+            user=self.teacher,
+            defaults={"role": Profile.ROLE_TEACHER},
+        )
+        self.course = Course.objects.create(
+            name="KB Course",
+            code="KB101",
+            teacher=self.teacher,
+        )
+        Lecture.objects.create(
+            course=self.course,
+            title="Тест лекция",
+            content_text="Ответ да или нет на экзамене по алгоритмам.",
+        )
+
+    def test_ai_assistant_search_does_not_crash(self):
+        client = Client()
+        client.login(username="kb_teacher", password="pass12345")
+        resp = client.get("/ai-assistant/?q=да")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.content.decode("utf-8", errors="replace")
+        self.assertNotIn("UnboundLocalError", body)
+        self.assertNotIn("Произошла ошибка: cannot access local variable", body)
+
+
 class RoleAccessSmokeTests(TestCase):
     def setUp(self):
         self.teacher = User.objects.create_user(

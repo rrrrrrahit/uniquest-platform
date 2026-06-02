@@ -97,6 +97,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # --- БЕЗОПАСНОСТЬ ---
 SECRET_KEY = os.environ.get('SECRET_KEY', get_random_secret_key())
 IS_RENDER = os.environ.get('RENDER') == 'true' or bool(os.environ.get('RENDER_EXTERNAL_HOSTNAME'))
+# На Render не грузим sentence-transformers на каждый поиск (быстрый BM25 + текст файлов).
+SEARCH_FAST_MODE = os.environ.get('SEARCH_FAST_MODE', '1' if IS_RENDER else '0').strip() in (
+    '1',
+    'true',
+    'yes',
+    'on',
+)
 # На Render по умолчанию production-режим (меньше CSRF/SSL сюрпризов).
 if IS_RENDER and os.environ.get('DEBUG') is None:
     DEBUG = False
