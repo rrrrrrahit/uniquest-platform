@@ -64,7 +64,20 @@ def _apply_db_ssl_options(db_config: dict) -> None:
     On some managed/internal Postgres networks forcing `sslmode=require`
     can fail with "SSL connection has been closed unexpectedly".
     """
-    sslmode = (os.environ.get("DB_SSLMODE") or "").strip().lower()
+    sslmode = (
+        os.environ.get("DB_SSLMODE")
+        or os.environ.get("PGSSLMODE")
+        or ""
+    ).strip().lower()
+
+    # Render-safe default: when host is a Render Postgres host and SSL mode
+    # is not explicitly configured, prefer non-SSL to avoid handshake failures
+    # like "SSL connection has been closed unexpectedly".
+    if not sslmode:
+        host = (db_config.get("HOST") or "").strip().lower()
+        if host.startswith("dpg-") and "postgres.render.com" in host:
+            sslmode = "disable"
+
     if not sslmode:
         return
     db_config.setdefault("OPTIONS", {})
