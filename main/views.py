@@ -57,7 +57,8 @@ from .search_service import (
     semantic_search,
     build_lecture_snippet,
     search_backend_label,
-    search_lectures_by_content,
+    hybrid_search_for_lectures,
+    serialize_search_results,
     prepare_lecture_for_search,
 )
 from .lecture_utils import (
@@ -205,8 +206,8 @@ def _lectures_visible_to_user(user):
 
 
 def _search_lectures_for_user(user, query: str, limit: int = 10):
-    """Поиск по содержимому файлов (PDF/DOCX/txt) и тексту лекций."""
-    return search_lectures_by_content(
+    """Гибридный поиск по тексту файлов, BM25, LSA и семантике."""
+    return hybrid_search_for_lectures(
         query,
         _lectures_visible_to_user(user),
         limit=limit,
@@ -2183,40 +2184,14 @@ def ai_assistant(request):
         )
 
         if query:
-            course_ids = list(
-                visible_lectures.values_list("course_id", flat=True).distinct()
-            )
             search_results = []
-            seen_ids: set[int] = set()
-
-            # 1) Семантический поиск по извлечённому тексту файлов.
-            if course_ids:
-                try:
-                    for result in semantic_search(query, top_k=12, course_ids=course_ids):
-                        lec_id = result.get("id")
-                        if not lec_id or lec_id in seen_ids:
-                            continue
-                        try:
-                            lecture = Lecture.objects.select_related("course").get(id=lec_id)
-                        except Lecture.DoesNotExist:
-                            continue
-                        if not lecture_is_searchable(lecture):
-                            continue
-                        result["lecture"] = lecture
-                        result["snippet"] = build_lecture_snippet(lecture, query, max_len=320)
-                        search_results.append(result)
-                        seen_ids.add(lec_id)
-                except Exception as e:
-                    logger.warning("Semantic search skipped: %s", e)
-
-            # 2) Прямой поиск по содержимому файлов (PDF/DOCX) — главный режим.
-            for result in _search_lectures_for_user(user, query, limit=12):
-                lec_id = result.get("id")
-                if lec_id and lec_id not in seen_ids:
-                    search_results.append(result)
-                    seen_ids.add(lec_id)
-
-            search_results = search_results[:10]
+            for result in _search_lectures_for_user(user, query, limit=10):
+                lecture = result.get("lecture")
+                if lecture and not lecture_is_searchable(lecture):
+                    continue
+                if lecture and not result.get("snippet"):
+                    result["snippet"] = build_lecture_snippet(lecture, query, max_len=360)
+                search_results.append(result)
 
             if not search_results and visible_lectures.exists():
                 messages.info(
@@ -3504,8 +3479,11 @@ def api_search_resources(request):
     top_k = int(payload.get("top_k") or 5)
     top_k = max(1, min(top_k, 20))
 
-    results = semantic_search(q, top_k=top_k)
-    return JsonResponse({"results": results})
+    visible = _lectures_visible_to_user(request.user)
+    if not visible.exists():
+        visible = Lecture.objects.all()
+    results = hybrid_search_for_lectures(q, visible, limit=top_k)
+    return JsonResponse({"results": serialize_search_results(results)})
 
 
 @login_required

@@ -54,6 +54,26 @@ class SearchServiceTests(TestCase):
         self.assertIn("title", results[0])
         self.assertIn("snippet", results[0])
 
+    def test_hybrid_search_finds_body_text(self):
+        from main.search_service import hybrid_search_for_lectures
+
+        course = Course.objects.first()
+        Lecture.objects.create(
+            course=course,
+            title="Алгоритмы",
+            content_text="Сортировка пузырьком и бинарный поиск в массиве.",
+        )
+        results = hybrid_search_for_lectures(
+            "пузырьков сортировка",
+            Lecture.objects.filter(course=course),
+            limit=5,
+        )
+        self.assertTrue(results)
+        joined = " ".join(
+            (r.get("title") or "") + " " + (r.get("snippet") or "") for r in results
+        ).lower()
+        self.assertIn("пузырьк", joined)
+
 
 class ApiTests(TestCase):
     def setUp(self):
