@@ -2162,9 +2162,7 @@ def ai_assistant(request):
                     top_k=10,
                     course_ids=course_ids if course_ids else None,
                 )
-                
-                # Загружаем объекты лекций для результатов
-                from .models import Lecture
+
                 for result in all_results:
                     lecture_id = result.get('id')
                     if lecture_id:
@@ -2189,7 +2187,19 @@ def ai_assistant(request):
                             search_results.append(result)
                     search_results = search_results[:10]
                 elif is_teacher:
-                    search_results = []
+                    # Преподаватель без привязанных курсов — ищем по всем своим лекциям.
+                    teacher_course_ids = set(
+                        Course.objects.filter(teacher=user).values_list("id", flat=True)
+                    )
+                    for result in all_results:
+                        lecture = result.get("lecture")
+                        if (
+                            lecture
+                            and getattr(lecture, "course_id", None) in teacher_course_ids
+                            and lecture_is_searchable(lecture)
+                        ):
+                            search_results.append(result)
+                    search_results = search_results[:10]
                 else:
                     # Для студента без записей на дисциплины выдача должна быть пустой.
                     search_results = []
@@ -2204,7 +2214,7 @@ def ai_assistant(request):
                     if user_courses:
                         fallback_qs = fallback_qs.filter(course__in=user_courses)
                     elif is_teacher:
-                        fallback_qs = fallback_qs.none()
+                        fallback_qs = fallback_qs.filter(course__teacher=user)
                     fallback_qs = fallback_qs[:10]
                     for lecture in fallback_qs:
                         snippet_source = build_lecture_snippet(lecture, query, max_len=240)
