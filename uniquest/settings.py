@@ -63,9 +63,10 @@ def _validate_render_db_host(host: str, source_name: str) -> None:
 
 def _apply_db_ssl_options(db_config: dict) -> None:
     """
-    Apply SSL mode only when explicitly configured.
-    On some managed/internal Postgres networks forcing `sslmode=require`
-    can fail with "SSL connection has been closed unexpectedly".
+    SSL для PostgreSQL (psycopg2: OPTIONS.sslmode).
+
+    Render External URL (*.postgres.render.com) — только с SSL (require).
+    Короткий internal-хост (dpg-…-a без домена) — без SSL внутри сети Render.
     """
     existing_sslmode = (
         (db_config.get("OPTIONS") or {}).get("sslmode", "") if isinstance(db_config.get("OPTIONS"), dict) else ""
@@ -78,12 +79,11 @@ def _apply_db_ssl_options(db_config: dict) -> None:
         or ""
     ).strip().lower()
 
-    # Render-safe default: when host is a Render Postgres host and SSL mode
-    # is not explicitly configured, prefer non-SSL to avoid handshake failures
-    # like "SSL connection has been closed unexpectedly".
     if not sslmode:
         host = (db_config.get("HOST") or "").strip().lower()
-        if host.startswith("dpg-") and "postgres.render.com" in host:
+        if "postgres.render.com" in host or _is_remote_db_host(host):
+            sslmode = "require"
+        elif host.startswith("dpg-"):
             sslmode = "disable"
 
     if not sslmode:
