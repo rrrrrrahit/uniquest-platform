@@ -54,6 +54,19 @@ def _validate_render_db_host(host: str, source_name: str) -> None:
             "(Internal/External Database URL)."
         )
 
+
+def _apply_db_ssl_options(db_config: dict) -> None:
+    """
+    Apply SSL mode only when explicitly configured.
+    On some managed/internal Postgres networks forcing `sslmode=require`
+    can fail with "SSL connection has been closed unexpectedly".
+    """
+    sslmode = (os.environ.get("DB_SSLMODE") or "").strip().lower()
+    if not sslmode:
+        return
+    db_config.setdefault("OPTIONS", {})
+    db_config["OPTIONS"]["sslmode"] = sslmode
+
 # --- ПУТИ ---
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -218,9 +231,7 @@ elif DB_URL:
         db_host = _normalize_render_db_host(DATABASES['default'].get('HOST', ''))
         DATABASES['default']['HOST'] = db_host
         _validate_render_db_host(db_host, 'RENDER_DB_URL/DATABASE_URL')
-        if _is_remote_db_host(db_host):
-            DATABASES['default'].setdefault('OPTIONS', {})
-            DATABASES['default']['OPTIONS'].setdefault('sslmode', 'require')
+        _apply_db_ssl_options(DATABASES['default'])
     except ImportError:
         # Если dj-database-url не установлен, парсим вручную
         import urllib.parse
@@ -239,6 +250,7 @@ elif DB_URL:
                 'CONN_MAX_AGE': 600,
             }}
             _validate_render_db_host(DATABASES['default']['HOST'], 'RENDER_DB_URL/DATABASE_URL')
+            _apply_db_ssl_options(DATABASES['default'])
         else:
             DATABASES = {
                 'default': {
@@ -266,8 +278,7 @@ else:
             }
         }
         _validate_render_db_host(db_host, 'DB_HOST')
-        if _is_remote_db_host(db_host):
-            DATABASES['default']['OPTIONS']['sslmode'] = 'require'
+        _apply_db_ssl_options(DATABASES['default'])
     else:
         DATABASES = {
             'default': {
