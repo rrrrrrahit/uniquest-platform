@@ -23,6 +23,10 @@ services:
       - key: CSRF_TRUSTED_ORIGINS
         value: https://uniquest.kz,https://www.uniquest.kz
       # Подключение к существующей базе данных
+      - key: RENDER_DB_URL
+        fromDatabase:
+          name: uniquest1-db
+          property: connectionString
       - key: DATABASE_URL
         fromDatabase:
           name: uniquest1-db

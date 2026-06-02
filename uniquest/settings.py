@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from django.core.exceptions import ImproperlyConfigured
 from django.core.management.utils import get_random_secret_key
 from dotenv import load_dotenv
 
@@ -10,6 +11,48 @@ load_dotenv()
 def _is_remote_db_host(host: str) -> bool:
     """True for non-local DB hosts where SSL is usually required."""
     return bool(host and host not in ("localhost", "127.0.0.1"))
+
+
+def _normalize_render_db_host(host: str) -> str:
+    """
+    Normalize DB host for Render deployments.
+    Some misconfigured envs contain short internal IDs like `dpg-...-a`,
+    while Django/psycopg expects a resolvable FQDN.
+    """
+    normalized = (host or "").strip()
+    if not normalized:
+        return normalized
+
+    # Already an IP/FQDN/local host.
+    if "." in normalized or normalized in ("localhost", "127.0.0.1"):
+        return normalized
+
+    if IS_RENDER and normalized.startswith("dpg-"):
+        region = (os.environ.get("RENDER_REGION") or "").strip().lower()
+        if region:
+            # Render internal host can appear as short id: dpg-...-a
+            # Build canonical regional hostname used by Render Postgres.
+            return f"{normalized}.{region}-postgres.render.com"
+
+        # Try known fallbacks from common env names first.
+        for key in ("DB_HOST", "PGHOST", "RENDER_DB_HOST", "DATABASE_HOST"):
+            candidate = (os.environ.get(key) or "").strip()
+            if candidate and "." in candidate:
+                return candidate
+    return normalized
+
+
+def _validate_render_db_host(host: str, source_name: str) -> None:
+    """
+    Fail fast on Render when DB host is likely an unresolved short identifier.
+    """
+    clean = (host or "").strip()
+    if IS_RENDER and clean.startswith("dpg-") and "." not in clean:
+        raise ImproperlyConfigured(
+            f"{source_name} contains an unresolvable Render DB host '{clean}'. "
+            "Set DATABASE_URL/DB_HOST to the full PostgreSQL hostname from Render "
+            "(Internal/External Database URL)."
+        )
 
 # --- ПУТИ ---
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -155,6 +198,7 @@ WSGI_APPLICATION = 'uniquest.wsgi.application'
 # Для локальной разработки по умолчанию используем SQLite.
 # PostgreSQL включается через DATABASE_URL или явные DB_* переменные.
 USE_SQLITE = os.environ.get('USE_SQLITE', 'False').lower() in ('1', 'true', 'yes')
+DB_URL = (os.environ.get('RENDER_DB_URL') or os.environ.get('DATABASE_URL') or '').strip()
 
 if USE_SQLITE:
     DATABASES = {
@@ -163,36 +207,38 @@ if USE_SQLITE:
             'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
-elif 'DATABASE_URL' in os.environ:
+elif DB_URL:
     try:
         import dj_database_url
         DATABASES = {'default': dj_database_url.config(
-            default=os.environ.get('DATABASE_URL'),
+            default=DB_URL,
             conn_max_age=600,
             conn_health_checks=True,
         )}
-        db_host = DATABASES['default'].get('HOST', '')
+        db_host = _normalize_render_db_host(DATABASES['default'].get('HOST', ''))
+        DATABASES['default']['HOST'] = db_host
+        _validate_render_db_host(db_host, 'RENDER_DB_URL/DATABASE_URL')
         if _is_remote_db_host(db_host):
             DATABASES['default'].setdefault('OPTIONS', {})
             DATABASES['default']['OPTIONS'].setdefault('sslmode', 'require')
     except ImportError:
         # Если dj-database-url не установлен, парсим вручную
         import urllib.parse
-        db_url = os.environ.get('DATABASE_URL')
-        if db_url:
-            parsed = urllib.parse.urlparse(db_url)
+        if DB_URL:
+            parsed = urllib.parse.urlparse(DB_URL)
             DATABASES = {'default': {
                 'ENGINE': 'django.db.backends.postgresql',
                 'NAME': parsed.path[1:] if parsed.path.startswith('/') else parsed.path,
                 'USER': parsed.username,
                 'PASSWORD': parsed.password,
-                'HOST': parsed.hostname,
+                'HOST': _normalize_render_db_host(parsed.hostname),
                 'PORT': parsed.port or '5432',
                 'OPTIONS': {
                     'connect_timeout': 10,
                 },
                 'CONN_MAX_AGE': 600,
             }}
+            _validate_render_db_host(DATABASES['default']['HOST'], 'RENDER_DB_URL/DATABASE_URL')
         else:
             DATABASES = {
                 'default': {
@@ -201,7 +247,7 @@ elif 'DATABASE_URL' in os.environ:
                 }
             }
 else:
-    db_host = os.environ.get('DB_HOST', '')
+    db_host = _normalize_render_db_host(os.environ.get('DB_HOST', ''))
     db_password = os.environ.get('DB_PASSWORD', '')
 
     if db_password or _is_remote_db_host(db_host):
@@ -219,6 +265,7 @@ else:
                 'CONN_MAX_AGE': 600,
             }
         }
+        _validate_render_db_host(db_host, 'DB_HOST')
         if _is_remote_db_host(db_host):
             DATABASES['default']['OPTIONS']['sslmode'] = 'require'
     else:
