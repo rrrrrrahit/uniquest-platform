@@ -155,7 +155,12 @@ class KnowledgeBaseViewTests(TestCase):
         body = resp.content.decode("utf-8", errors="replace")
         self.assertNotIn("UnboundLocalError", body)
         self.assertNotIn("cannot access local variable", body)
-        self.assertIn("2026-06-03-v3", body)
+        self.assertIn("2026-06-03-v4", body)
+
+    def test_deploy_version_endpoint(self):
+        resp = self.client.get("/__deploy_version__/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"2026-06-03-v4", resp.content)
 
     def test_kb_finds_content_text(self):
         from main.kb import search_lectures

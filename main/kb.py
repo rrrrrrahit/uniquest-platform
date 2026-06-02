@@ -22,7 +22,7 @@ from main.models import Course, Enrollment, Lecture, Profile, ScheduleEntry, Stu
 
 logger = logging.getLogger(__name__)
 
-KB_BUILD_ID = "2026-06-03-v3"
+KB_BUILD_ID = "2026-06-03-v4"
 _TOKEN_RE = re.compile(r"[\wа-яёА-ЯЁ]+", re.UNICODE)
 _RU_STOP = frozenset(
     "и в во на с со по для что как это а но или не о об от до из у к же ли бы все при так их".split()
