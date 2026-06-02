@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
@@ -6,6 +7,8 @@ from dotenv import load_dotenv
 
 # Загружаем .env
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 def _is_remote_db_host(host: str) -> bool:
@@ -253,6 +256,12 @@ elif DB_URL:
         DATABASES['default']['HOST'] = db_host
         _validate_render_db_host(db_host, 'RENDER_DB_URL/DATABASE_URL')
         _apply_db_ssl_options(DATABASES['default'])
+        if os.environ.get('RENDER') == 'true' or os.environ.get('RENDER_EXTERNAL_HOSTNAME'):
+            logger.warning(
+                "Render DB config: HOST=%s PORT=%s (resume Postgres if connection fails)",
+                DATABASES['default'].get('HOST'),
+                DATABASES['default'].get('PORT'),
+            )
     except ImportError:
         # Если dj-database-url не установлен, парсим вручную
         import urllib.parse
