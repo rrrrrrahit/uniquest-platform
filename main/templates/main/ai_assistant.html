@@ -124,12 +124,39 @@
         <div class="alert alert-info text-center">
           <i class="fas fa-info-circle fa-2x mb-3"></i>
           <h5>Ничего не найдено</h5>
-          <p>Попробуйте слова из <strong>названия лекции</strong> или <strong>дисциплины</strong> (например: «программирование», «база данных»).</p>
-          <p class="mb-0 small text-muted">Поиск только по вашим дисциплинам. Если список пуст — вы не записаны на курсы с материалами (после регистрации запись создаётся автоматически при следующем входе).</p>
+          <p>Попробуйте слова из <strong>названия лекции</strong>, <strong>имени файла</strong> или <strong>дисциплины</strong>.</p>
+          <p class="mb-0 small text-muted">Если лекция только что загружена — откройте её и скачайте файл; текст для поиска подтягивается при первом запросе.</p>
         </div>
       {% endif %}
     </div>
   </div>
+
+  {% if not search_results and recent_materials %}
+  <div class="row mb-4">
+    <div class="col-12">
+      <h3 class="mb-3"><i class="fas fa-folder-open me-2 text-primary"></i>Ваши материалы (откройте и найдите слово в файле)</h3>
+      <div class="row g-3">
+        {% for lecture in recent_materials %}
+          <div class="col-md-6">
+            <div class="card h-100">
+              <div class="card-body">
+                <h6 class="mb-1">{{ lecture.title }}</h6>
+                <div class="small text-muted mb-2">{{ lecture.course.name }}</div>
+                <p class="small">{{ lecture.content_text|default:"Текст из файла подгружается при поиске."|truncatechars:140 }}</p>
+                <div>
+                  <a href="{% url 'lecture_detail' lecture.id %}" class="btn btn-sm btn-outline-primary">Открыть</a>
+                  {% if lecture.lecture_file %}
+                    <a href="{% url 'download_lecture_file' lecture.id %}" class="btn btn-sm btn-outline-success">Скачать</a>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
 {% else %}
   <div class="row mb-4">
     <div class="col-12">

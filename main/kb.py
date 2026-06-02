@@ -22,7 +22,7 @@ from main.models import Course, Enrollment, Lecture, Profile, ScheduleEntry, Stu
 
 logger = logging.getLogger(__name__)
 
-KB_BUILD_ID = "2026-06-03-v4"
+KB_BUILD_ID = "2026-06-03-v5"
 _TOKEN_RE = re.compile(r"[\wа-яёА-ЯЁ]+", re.UNICODE)
 _RU_STOP = frozenset(
     "и в во на с со по для что как это а но или не о об от до из у к же ли бы все при так их".split()
@@ -34,23 +34,30 @@ _RU_STOP = frozenset(
 # ---------------------------------------------------------------------------
 
 
+def _lecture_file_name(lecture: Lecture) -> str:
+    file_field = getattr(lecture, "lecture_file", None)
+    if not file_field or not file_field.name:
+        return ""
+    return Path(file_field.name).name
+
+
 def _extract_file_text(lecture: Lecture) -> str:
     file_field = getattr(lecture, "lecture_file", None)
-    if not file_field:
+    if not file_field or not file_field.name:
         return ""
-    name = (getattr(file_field, "name", "") or "").lower()
+    name = file_field.name.lower()
     if "." not in name:
         return ""
     ext = name.rsplit(".", 1)[-1]
     try:
-        raw = file_field.read()
-    except Exception:
+        if not file_field.storage.exists(file_field.name):
+            logger.warning("Lecture %s: file not on disk %s", lecture.pk, file_field.name)
+            return ""
+        with file_field.open("rb") as handle:
+            raw = handle.read()
+    except Exception as exc:
+        logger.warning("Lecture %s: read failed: %s", lecture.pk, exc)
         return ""
-    finally:
-        try:
-            file_field.seek(0)
-        except Exception:
-            pass
     if not raw:
         return ""
 
@@ -208,6 +215,50 @@ def recent_materials(user: User, limit: int = 12) -> List[Lecture]:
 # ---------------------------------------------------------------------------
 
 
+def _db_match_ids(user: User, query: str, terms: List[str]) -> set[int]:
+    """Быстрый отбор по полям БД (работает даже без извлечённого текста файла)."""
+    base = visible_lectures(user)
+    q_lower = query.lower()
+    db_q = Q(title__icontains=query) | Q(content_text__icontains=query) | Q(course__name__icontains=query)
+    if q_lower:
+        db_q |= Q(lecture_file__icontains=q_lower.replace(" ", "_"))
+        db_q |= Q(lecture_file__icontains=q_lower)
+    for term in terms:
+        db_q |= Q(title__icontains=term) | Q(content_text__icontains=term) | Q(course__name__icontains=term)
+        db_q |= Q(lecture_file__icontains=term)
+    return set(base.filter(db_q).values_list("pk", flat=True))
+
+
+def _score_lecture(lec: Lecture, query: str, terms: List[str], q_lower: str) -> float:
+    body = lecture_body(lec)
+    title = (lec.title or "").strip()
+    course_name = (getattr(lec.course, "name", None) or "").strip()
+    fname = _lecture_file_name(lec).lower()
+    hay = f"{title}\n{course_name}\n{fname}\n{body}".lower()
+    if not hay.strip():
+        return 0.0
+
+    score = 0.0
+    if q_lower in title.lower():
+        score += 60.0
+    if fname and q_lower in fname:
+        score += 45.0
+    if q_lower in hay:
+        score += 35.0
+    for term in terms:
+        if term in title.lower():
+            score += 14.0
+        if fname and term in fname:
+            score += 12.0
+        if term in hay:
+            score += min(hay.count(term) * 4.0, 24.0)
+        elif len(term) >= 4:
+            stem = term[: max(4, len(term) - 2)]
+            if stem and stem in hay:
+                score += 10.0
+    return score
+
+
 def search_lectures(user: User, query: str, limit: int = 10) -> List[Dict[str, Any]]:
     query = (query or "").strip()
     if len(query) < 2:
@@ -215,34 +266,25 @@ def search_lectures(user: User, query: str, limit: int = 10) -> List[Dict[str, A
 
     terms = _terms(query) or [query.lower()]
     q_lower = query.lower()
-    candidates = list(visible_lectures(user).order_by("-created_at")[:250])
+    base = visible_lectures(user)
+    db_ids = _db_match_ids(user, query, terms)
+
+    seen: set[int] = set()
+    candidates: List[Lecture] = []
+    if db_ids:
+        for lec in base.filter(pk__in=db_ids).select_related("course"):
+            candidates.append(lec)
+            seen.add(lec.pk)
+    for lec in base.select_related("course").order_by("-created_at")[:250]:
+        if lec.pk not in seen:
+            candidates.append(lec)
+            seen.add(lec.pk)
 
     scored: List[Tuple[float, Lecture]] = []
     for lec in candidates:
-        body = lecture_body(lec)
-        title = (lec.title or "").strip()
-        course_name = (getattr(lec.course, "name", None) or "").strip()
-        hay = f"{title}\n{course_name}\n{body}".lower()
-        if not hay.strip():
-            continue
-
-        score = 0.0
-        if q_lower in title.lower():
-            score += 60.0
-        if q_lower in hay:
-            score += 35.0
-        for term in terms:
-            if term in title.lower():
-                score += 12.0
-            if term in hay:
-                score += min(hay.count(term) * 4.0, 24.0)
-            elif len(term) >= 4:
-                stem = term[: max(4, len(term) - 1)]
-                if stem in hay:
-                    score += 10.0
-
-        if score > 0:
-            scored.append((score, lec))
+        score = _score_lecture(lec, query, terms, q_lower)
+        if score > 0 or lec.pk in db_ids:
+            scored.append((max(score, 25.0 if lec.pk in db_ids else score), lec))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     out: List[Dict[str, Any]] = []
@@ -308,7 +350,8 @@ def knowledge_base_view(request):
             if not search_results and visible_lectures(user).exists():
                 messages.info(
                     request,
-                    "Ничего не найдено. Введите слово из текста PDF/DOCX или названия лекции.",
+                    "По этому слову совпадений нет. Попробуйте слово из названия файла/лекции "
+                    "или другое слово из PDF. Ниже — все ваши доступные материалы.",
                 )
 
     return render(

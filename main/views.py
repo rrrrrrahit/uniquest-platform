@@ -53,7 +53,8 @@ from django.utils import timezone
 from datetime import timedelta
 import json
 
-from .search_service import semantic_search, prepare_lecture_for_search
+from .search_service import semantic_search
+from .kb import lecture_body as index_lecture_body
 from .lecture_utils import (
     build_lecture_download_response,
     lecture_has_downloadable_content,
@@ -2662,7 +2663,7 @@ def teacher_dashboard(request):
             if lecture_form.is_valid():
                 lecture = lecture_form.save()
                 try:
-                    prepare_lecture_for_search(lecture)
+                    index_lecture_body(lecture)
                 except Exception as exc:
                     logger.warning("Lecture index after upload failed: %s", exc)
                 messages.success(
