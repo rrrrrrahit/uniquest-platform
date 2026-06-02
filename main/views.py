@@ -185,6 +185,57 @@ def _recent_materials_queryset(base_qs):
     return qs.filter(~Q(content_url="") | ~Q(content_text=""))
 
 
+def _lectures_visible_to_user(user):
+    """Лекции, которые пользователь может видеть в базе знаний."""
+    profile = getattr(user, "profile", None)
+    if user.is_staff and not profile:
+        return Lecture.objects.select_related("course").all()
+    if profile and profile.role == Profile.ROLE_TEACHER:
+        return Lecture.objects.select_related("course").filter(course__teacher=user)
+    _, courses = _get_student_enrollments(user)
+    if courses:
+        return Lecture.objects.select_related("course").filter(course__in=courses)
+    return Lecture.objects.none()
+
+
+def _search_lectures_for_user(user, query: str, limit: int = 10):
+    """
+    Надёжный поиск по названию/тексту/курсу среди доступных лекций.
+    Работает даже без векторного индекса и тяжёлой семантики.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    base_qs = _lectures_visible_to_user(user)
+    q_filter = (
+        Q(title__icontains=query)
+        | Q(content_text__icontains=query)
+        | Q(course__name__icontains=query)
+    )
+    for term in query.split():
+        if len(term) >= 2:
+            q_filter |= (
+                Q(title__icontains=term)
+                | Q(content_text__icontains=term)
+                | Q(course__name__icontains=term)
+            )
+
+    hits = base_qs.filter(q_filter).distinct().order_by("-created_at")[:limit]
+    results = []
+    for lecture in hits:
+        results.append(
+            {
+                "id": lecture.id,
+                "title": lecture.title,
+                "snippet": build_lecture_snippet(lecture, query, max_len=240),
+                "score": 85.0,
+                "lecture": lecture,
+            }
+        )
+    return results
+
+
 # Централизованный редирект пользователя по роли.
 def _role_home(user):
     # Берём роль напрямую из БД, чтобы не поймать stale-кэш profile после регистрации.
@@ -2149,91 +2200,46 @@ def ai_assistant(request):
         focus_areas = []
         recent_materials = []
 
-        if user_courses:
-            recent_materials = list(
-                _recent_materials_queryset(Lecture.objects.filter(course__in=user_courses))[:12]
-            )
+        visible_lectures = _lectures_visible_to_user(user)
+        recent_materials = list(
+            _recent_materials_queryset(visible_lectures)[:12]
+        )
 
         if query:
+            # 1) Сначала простой и надёжный поиск (всегда должен находить по названию).
+            search_results = _search_lectures_for_user(user, query, limit=10)
+
+            # 2) Дополняем семантикой, если она доступна.
             try:
-                course_ids = {c.id for c in user_courses if c and hasattr(c, "id")} if user_courses else None
-                all_results = semantic_search(
-                    query,
-                    top_k=10,
-                    course_ids=course_ids if course_ids else None,
+                course_ids = list(
+                    visible_lectures.values_list("course_id", flat=True).distinct()
                 )
-
-                for result in all_results:
-                    lecture_id = result.get('id')
-                    if lecture_id:
+                if course_ids:
+                    seen_ids = {r["id"] for r in search_results}
+                    for result in semantic_search(query, top_k=10, course_ids=course_ids):
+                        lec_id = result.get("id")
+                        if not lec_id or lec_id in seen_ids:
+                            continue
                         try:
-                            lecture = Lecture.objects.select_related('course').get(id=lecture_id)
-                            result['lecture'] = lecture
+                            lecture = Lecture.objects.select_related("course").get(id=lec_id)
                         except Lecture.DoesNotExist:
-                            pass
-                        except Exception:
-                            pass
-                
-                # Строго ограничиваем результаты доступными курсами и только реальными материалами.
-                if user_courses:
-                    course_ids = {c.id for c in user_courses if c and hasattr(c, "id")}
-                    for result in all_results:
-                        lecture = result.get("lecture")
-                        if (
-                            lecture
-                            and getattr(lecture, "course_id", None) in course_ids
-                            and lecture_is_searchable(lecture)
-                        ):
-                            search_results.append(result)
-                    search_results = search_results[:10]
-                elif is_teacher:
-                    # Преподаватель без привязанных курсов — ищем по всем своим лекциям.
-                    teacher_course_ids = set(
-                        Course.objects.filter(teacher=user).values_list("id", flat=True)
-                    )
-                    for result in all_results:
-                        lecture = result.get("lecture")
-                        if (
-                            lecture
-                            and getattr(lecture, "course_id", None) in teacher_course_ids
-                            and lecture_is_searchable(lecture)
-                        ):
-                            search_results.append(result)
-                    search_results = search_results[:10]
-                else:
-                    # Для студента без записей на дисциплины выдача должна быть пустой.
-                    search_results = []
-
-                if not search_results:
-                    # Надёжный fallback на keyword-поиск по лекциям и курсам.
-                    fallback_qs = Lecture.objects.select_related("course").filter(
-                        Q(title__icontains=query)
-                        | Q(content_text__icontains=query)
-                        | Q(course__name__icontains=query)
-                    )
-                    if user_courses:
-                        fallback_qs = fallback_qs.filter(course__in=user_courses)
-                    elif is_teacher:
-                        fallback_qs = fallback_qs.filter(course__teacher=user)
-                    fallback_qs = fallback_qs[:10]
-                    for lecture in fallback_qs:
-                        snippet_source = build_lecture_snippet(lecture, query, max_len=240)
-                        search_results.append(
-                            {
-                                "id": lecture.id,
-                                "title": lecture.title,
-                                "snippet": snippet_source,
-                                "score": 0.0,
-                                "lecture": lecture,
-                            }
-                        )
+                            continue
+                        if not lecture_is_searchable(lecture):
+                            continue
+                        result["lecture"] = lecture
+                        result["snippet"] = build_lecture_snippet(lecture, query, max_len=240)
+                        search_results.append(result)
+                        seen_ids.add(lec_id)
+                        if len(search_results) >= 10:
+                            break
             except Exception as e:
-                # Если поиск не работает, показываем пустые результаты
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.error(f'AI Assistant search error: {str(e)}', exc_info=True)
-                search_results = []
-                messages.warning(request, 'Поиск временно недоступен. Попробуйте позже.')
+                logger.warning("Semantic search skipped: %s", e)
+
+            if not search_results and visible_lectures.exists():
+                messages.info(
+                    request,
+                    "По запросу ничего не найдено. Попробуйте слово из названия лекции или дисциплины.",
+                )
         else:
             suggested_questions = []
         popular_questions = []
