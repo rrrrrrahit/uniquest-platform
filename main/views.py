@@ -75,6 +75,11 @@ def _enroll_student_in_available_courses(student):
                 "course_id", flat=True
             )
         )
+        course_ids.update(
+            ScheduleEntry.objects.filter(groups__group_id=student.group_id).values_list(
+                "course_id", flat=True
+            )
+        )
 
     course_ids.update(
         Lecture.objects.exclude(content_text="")
@@ -85,6 +90,12 @@ def _enroll_student_in_available_courses(student):
     course_ids.update(
         Lecture.objects.exclude(lecture_file="")
         .exclude(lecture_file__isnull=True)
+        .values_list("course_id", flat=True)
+        .distinct()
+    )
+    course_ids.update(
+        Lecture.objects.exclude(content_url="")
+        .exclude(content_url__isnull=True)
         .values_list("course_id", flat=True)
         .distinct()
     )
@@ -103,14 +114,32 @@ def _enroll_student_in_available_courses(student):
 
 
 def _get_student_enrollments(user):
+    profile = getattr(user, "profile", None)
     try:
         student = Student.objects.get(user=user)
     except Student.DoesNotExist:
-        return None, []
-    if not Enrollment.objects.filter(student=student).exists():
+        student = None
+
+    course_ids = set(
+        Enrollment.objects.filter(student__user=user).values_list("course_id", flat=True)
+    )
+    if profile and profile.role == Profile.ROLE_STUDENT:
+        schedule_q = Q(groups__user=user)
+        if profile.group_id:
+            schedule_q |= Q(groups__group_id=profile.group_id)
+        course_ids.update(
+            ScheduleEntry.objects.filter(schedule_q).values_list("course_id", flat=True)
+        )
+
+    if student and not Enrollment.objects.filter(student=student).exists():
         _enroll_student_in_available_courses(student)
-    enrollments = Enrollment.objects.filter(student=student).select_related("course")
-    return student, [e.course for e in enrollments if e.course]
+
+    if student:
+        for course_id in course_ids:
+            Enrollment.objects.get_or_create(student=student, course_id=course_id)
+
+    courses = list(Course.objects.filter(id__in=course_ids).order_by("name"))
+    return student, courses
 
 
 def _sync_default_admin_user():
@@ -173,7 +202,14 @@ def _user_can_access_course(user, course):
         return True
     if user_profile and user_profile.role == Profile.ROLE_TEACHER:
         return course.teacher_id == user.id
-    return Enrollment.objects.filter(student__user=user, course=course).exists()
+    if Enrollment.objects.filter(student__user=user, course=course).exists():
+        return True
+    if user_profile and user_profile.role == Profile.ROLE_STUDENT:
+        schedule_q = Q(groups__user=user)
+        if user_profile.group_id:
+            schedule_q |= Q(groups__group_id=user_profile.group_id)
+        return ScheduleEntry.objects.filter(schedule_q, course=course).exists()
+    return False
 
 
 def _deny_and_redirect(request, text, route_name=None):
@@ -2701,17 +2737,7 @@ def lecture_detail(request, pk: int):
 @login_required
 def download_lecture_file(request, pk: int):
     lecture = get_object_or_404(Lecture.objects.select_related("course"), pk=pk)
-
-    user_profile = getattr(request.user, "profile", None)
-    if request.user.is_staff and not user_profile:
-        has_access = True
-    elif user_profile and user_profile.role == Profile.ROLE_TEACHER:
-        has_access = lecture.course.teacher_id == request.user.id
-    else:
-        has_access = Enrollment.objects.filter(
-            student__user=request.user,
-            course=lecture.course,
-        ).exists()
+    has_access = _user_can_access_course(request.user, lecture.course)
 
     if not has_access:
         return _deny_and_redirect(request, "У вас нет доступа к этому материалу.")
